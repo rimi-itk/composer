@@ -12,10 +12,12 @@
 
 namespace Composer\Util;
 
+use Composer\Composer;
 use Composer\Config;
 use Composer\IO\IOInterface;
 use Composer\Downloader\TransportException;
 use Composer\CaBundle\CaBundle;
+use Composer\Transfer\TransferInterface;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -45,6 +47,9 @@ class RemoteFilesystem
     private $redirects;
     private $maxRedirects = 20;
 
+    /** @var TransferInterface */
+    private $transfer;
+
     /**
      * Constructor.
      *
@@ -53,7 +58,7 @@ class RemoteFilesystem
      * @param array       $options    The options
      * @param bool        $disableTls
      */
-    public function __construct(IOInterface $io, Config $config = null, array $options = array(), $disableTls = false)
+    public function __construct(IOInterface $io, Config $config = null, array $options = array(), $disableTls = false, TransferInterface $transfer = null)
     {
         $this->io = $io;
 
@@ -68,6 +73,41 @@ class RemoteFilesystem
         // handle the other externally set options normally.
         $this->options = array_replace_recursive($this->options, $options);
         $this->config = $config;
+        $this->transfer = $transfer;
+    }
+
+    /**
+     * @return TransferInterface
+     */
+    protected function getTransfer()
+    {
+        if (null === $this->transfer) {
+            if ($this->isStreamContextUsed()) {
+                $this->transfer = new \Composer\Transfer\StreamContextTransfer();
+
+                $this->transfer->setDefaultParams(array('notification' => array($this, 'callbackGet')));
+            } else {
+                $this->transfer = new \Composer\Transfer\CurlTransfer();
+            }
+        }
+
+        return $this->transfer;
+    }
+
+    /**
+     * @return bool
+     */
+    private function isStreamContextUsed()
+    {
+        if (ini_get('allow_url_fopen')) {
+            return true;
+        }
+
+        if (!extension_loaded('curl')) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -205,6 +245,7 @@ class RemoteFilesystem
         $this->retryAuthFailure = true;
         $this->lastHeaders = array();
         $this->redirects = 1; // The first request counts.
+        $headers = array();
 
         // capture username/password from URL if there is one
         if (preg_match('{^https?://(.+):(.+)@([^/]+)}i', $fileUrl, $match)) {
@@ -286,9 +327,10 @@ class RemoteFilesystem
             $errorMessage .= preg_replace('{^file_get_contents\(.*?\): }', '', $msg);
         });
         try {
-            $result = file_get_contents($fileUrl, false, $ctx);
+            $result = $this->getTransfer()->download($fileUrl, $options, $this->io, $this->progress, $this->getUserAgent());
+            $headers = $this->getTransfer()->getHeaders();
 
-            $contentLength = !empty($http_response_header[0]) ? $this->findHeaderValue($http_response_header, 'content-length') : null;
+            $contentLength = !empty($headers[0]) ? $this->findHeaderValue($headers, 'content-length') : null;
             if ($contentLength && Platform::strlen($result) < $contentLength) {
                 // alas, this is not possible via the stream callback because STREAM_NOTIFY_COMPLETED is documented, but not implemented anywhere in PHP
                 throw new TransportException('Content-Length mismatch');
@@ -306,9 +348,9 @@ class RemoteFilesystem
                 }
             }
         } catch (\Exception $e) {
-            if ($e instanceof TransportException && !empty($http_response_header[0])) {
-                $e->setHeaders($http_response_header);
-                $e->setStatusCode($this->findStatusCode($http_response_header));
+            if ($e instanceof TransportException && !empty($headers[0])) {
+                $e->setHeaders($headers);
+                $e->setStatusCode($this->findStatusCode($headers));
             }
             if ($e instanceof TransportException && $result !== false) {
                 $e->setResponse($result);
@@ -335,9 +377,9 @@ class RemoteFilesystem
 
         $statusCode = null;
         $contentType = null;
-        if (!empty($http_response_header[0])) {
-            $statusCode = $this->findStatusCode($http_response_header);
-            $contentType = $this->findHeaderValue($http_response_header, 'content-type');
+        if (!empty($headers[0])) {
+            $statusCode = $this->findStatusCode($headers);
+            $contentType = $this->findHeaderValue($headers, 'content-type');
         }
 
         // check for bitbucket login page asking to authenticate
@@ -355,7 +397,7 @@ class RemoteFilesystem
         $hasFollowedRedirect = false;
         if ($userlandFollow && $statusCode >= 300 && $statusCode <= 399 && $statusCode !== 304 && $this->redirects < $this->maxRedirects) {
             $hasFollowedRedirect = true;
-            $result = $this->handleRedirect($http_response_header, $additionalOptions, $result);
+            $result = $this->handleRedirect($headers, $additionalOptions, $result);
         }
 
         // fail 4xx and 5xx responses and capture the response
@@ -365,8 +407,8 @@ class RemoteFilesystem
                     $this->io->overwriteError("    Downloading: <error>Failed</error>");
                 }
 
-                $e = new TransportException('The "'.$this->fileUrl.'" file could not be downloaded ('.$http_response_header[0].')', $statusCode);
-                $e->setHeaders($http_response_header);
+                $e = new TransportException('The "'.$this->fileUrl.'" file could not be downloaded ('.$headers[0].')', $statusCode);
+                $e->setHeaders($headers);
                 $e->setResponse($result);
                 $e->setStatusCode($statusCode);
                 throw $e;
@@ -380,7 +422,7 @@ class RemoteFilesystem
 
         // decode gzip
         if ($result && extension_loaded('zlib') && substr($fileUrl, 0, 4) === 'http' && !$hasFollowedRedirect) {
-            $decode = 'gzip' === strtolower($this->findHeaderValue($http_response_header, 'content-encoding'));
+            $decode = 'gzip' === strtolower($this->findHeaderValue($headers, 'content-encoding'));
 
             if ($decode) {
                 try {
@@ -479,9 +521,9 @@ class RemoteFilesystem
         }
 
         if (false === $result) {
-            $e = new TransportException('The "'.$this->fileUrl.'" file could not be downloaded: '.$errorMessage, $errorCode);
-            if (!empty($http_response_header[0])) {
-                $e->setHeaders($http_response_header);
+            $e = new TransportException('The "'.$this->fileUrl.'" file could not be downloaded: '.$errorMessage, $this->transfer->getErrorCode());
+            if (!empty($headers[0])) {
+                $e->setHeaders($headers);
             }
 
             if (!$this->degradedMode && false !== strpos($e->getMessage(), 'Operation timed out')) {
@@ -497,8 +539,8 @@ class RemoteFilesystem
             throw $e;
         }
 
-        if (!empty($http_response_header[0])) {
-            $this->lastHeaders = $http_response_header;
+        if (!empty($headers[0])) {
+            $this->lastHeaders = $headers;
         }
 
         return $result;
@@ -737,9 +779,22 @@ class RemoteFilesystem
         return $options;
     }
 
-    private function handleRedirect(array $http_response_header, array $additionalOptions, $result)
+    protected function getUserAgent()
     {
-        if ($locationHeader = $this->findHeaderValue($http_response_header, 'location')) {
+        return sprintf(
+            'User-Agent: Composer/%s (%s; %s; PHP %s.%s.%s)',
+            Composer::VERSION === '@package_version@' ? 'source' : Composer::VERSION,
+            php_uname('s'),
+            php_uname('r'),
+            PHP_MAJOR_VERSION,
+            PHP_MINOR_VERSION,
+            PHP_RELEASE_VERSION
+        );
+    }
+
+    private function handleRedirect(array $headers, array $additionalOptions, $result)
+    {
+        if ($locationHeader = $this->findHeaderValue($headers, 'location')) {
             if (parse_url($locationHeader, PHP_URL_SCHEME)) {
                 // Absolute URL; e.g. https://example.com/composer
                 $targetUrl = $locationHeader;
@@ -770,8 +825,8 @@ class RemoteFilesystem
         }
 
         if (!$this->retry) {
-            $e = new TransportException('The "'.$this->fileUrl.'" file could not be downloaded, got redirect without Location ('.$http_response_header[0].')');
-            $e->setHeaders($http_response_header);
+            $e = new TransportException('The "'.$this->fileUrl.'" file could not be downloaded, got redirect without Location ('.$headers[0].')');
+            $e->setHeaders($headers);
             $e->setResponse($result);
 
             throw $e;

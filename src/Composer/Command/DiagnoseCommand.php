@@ -58,6 +58,22 @@ EOT
     }
 
     /**
+     * @return bool
+     */
+    private function isStreamContextUsed()
+    {
+        if (ini_get('allow_url_fopen')) {
+            return true;
+        }
+
+        if (!extension_loaded('curl')) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * {@inheritdoc}
      */
     protected function execute(InputInterface $input, OutputInterface $output)
@@ -97,14 +113,16 @@ EOT
         $io->write('Checking https connectivity to packagist: ', false);
         $this->outputResult($this->checkHttp('https', $config));
 
-        $opts = stream_context_get_options(StreamContextFactory::getContext('http://example.org'));
-        if (!empty($opts['http']['proxy'])) {
-            $io->write('Checking HTTP proxy: ', false);
-            $this->outputResult($this->checkHttpProxy());
-            $io->write('Checking HTTP proxy support for request_fulluri: ', false);
-            $this->outputResult($this->checkHttpProxyFullUriRequestParam());
-            $io->write('Checking HTTPS proxy support for request_fulluri: ', false);
-            $this->outputResult($this->checkHttpsProxyFullUriRequestParam());
+        if ($this->isStreamContextUsed()) {
+            $opts = stream_context_get_options(StreamContextFactory::getContext('http://example.org'));
+            if (!empty($opts['http']['proxy'])) {
+                $io->write('Checking HTTP proxy: ', false);
+                $this->outputResult($this->checkHttpProxy());
+                $io->write('Checking HTTP proxy support for request_fulluri: ', false);
+                $this->outputResult($this->checkHttpProxyFullUriRequestParam());
+                $io->write('Checking HTTPS proxy support for request_fulluri: ', false);
+                $this->outputResult($this->checkHttpsProxyFullUriRequestParam());
+            }
         }
 
         if ($oauth = $config->get('github-oauth')) {
@@ -466,7 +484,7 @@ EOT
             $errors['iconv_mbstring'] = true;
         }
 
-        if (!ini_get('allow_url_fopen')) {
+        if (!ini_get('allow_url_fopen') && !extension_loaded('curl')) {
             $errors['allow_url_fopen'] = true;
         }
 
