@@ -1,0 +1,11 @@
+{
+    "name": "leantime/leantime",
+    "homepage": "https://github.com/Leantime/leantime",
+    "repositories": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/Leantime/leantime"
+        }
+    ],
+    "require-all": true
+}
