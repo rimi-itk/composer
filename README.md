@@ -1,8 +1,20 @@
-# composer
+# Composer
 
-<https://getcomposer.org/doc/articles/handling-private-packages.md#setup>
-<https://github.com/composer/satis?tab=readme-ov-file#run-as-docker-container>
+A Composer repository powered by [Satis](https://github.com/composer/satis).
 
-```shell
-task build
+## Usage
+
+Add <https://rimi-itk.github.io/composer/> as a [`composer`
+repository](https://getcomposer.org/doc/05-repositories.md#composer) in your
+project:
+
+```json
+{
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://rimi-itk.github.io/composer/"
+        }
+    ]
+}
 ```

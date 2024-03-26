@@ -31,13 +31,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Build stuff
+        # See https://packagist.com/docs/setup-ci-cd#github-actions for details on `COMPOSER_AUTH`
+        run: |
+          docker run --rm --init \
+            --env COMPOSER_AUTH='{ "github-oauth": { "github.com": "${{ secrets.GITHUB_TOKEN }}" } }' \
+            --user $(id -u):$(id -g) \
+            --volume $(pwd):/build \
+            --volume "${COMPOSER_HOME:-$HOME/.composer}:/composer" \
+            composer/satis build satis.json dist
       - name: Setup Pages
         uses: actions/configure-pages@v4
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           # Upload entire repository
-          path: '.'
+          path: 'dist'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

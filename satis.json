@@ -1,6 +1,6 @@
 {
-    "name": "leantime/leantime",
-    "homepage": "https://github.com/Leantime/leantime",
+    "name": "rimi-itk/composer",
+    "homepage": "https://rimi-itk.github.io/composer/",
     "repositories": [
         {
           "type": "vcs",
